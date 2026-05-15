@@ -165,21 +165,54 @@ def get_naver_trend_scores():
 # 키워드 선택
 # ============================================
 
-def select_keyword():
-    """네이버 트렌드 기반으로 검색량 높은 키워드 선택. 실패 시 랜덤 선택."""
+def get_recently_used_keywords(limit=15):
+    """최근 limit개 게시글에서 사용된 키워드 목록 반환"""
 
+    if not os.path.exists(POSTS_DIR):
+        return set()
+
+    files = sorted(
+        [f for f in os.listdir(POSTS_DIR)
+         if f.endswith(".md") and not f.startswith("참고예시")],
+        reverse=True
+    )[:limit]
+
+    used = set()
+    for filename in files:
+        # 파일명에서 키워드 추출: YYYY-MM-DD-키워드.md → 키워드
+        name = filename[len("YYYY-MM-DD-"):].replace("-", " ").replace(".md", "")
+        # 날짜 부분(11자) 제거
+        name = filename[11:].replace("-", " ").replace(".md", "")
+        used.add(name)
+
+    return used
+
+
+def select_keyword():
+    """네이버 트렌드 기반으로 검색량 높은 키워드 선택 (최근 15개 중복 제외). 실패 시 랜덤 선택."""
+
+    recently_used = get_recently_used_keywords(limit=15)
     scores = get_naver_trend_scores()
 
     if scores:
-        best_keyword_name = max(scores, key=scores.get)
-        best_score = scores[best_keyword_name]
-        print(f"[트렌드 Top] {best_keyword_name} (점수: {best_score:.1f})")
+        # 점수 높은 순으로 정렬 후 최근 사용 안 된 키워드 선택
+        sorted_keywords = sorted(scores, key=scores.get, reverse=True)
+        for keyword_name in sorted_keywords:
+            if keyword_name not in recently_used:
+                print(f"[트렌드 선택] {keyword_name} (점수: {scores[keyword_name]:.1f})")
+                for kw in KEYWORDS:
+                    if kw["keyword"] == keyword_name:
+                        return kw
+            else:
+                print(f"[중복 건너뜀] {keyword_name}")
 
-        for kw in KEYWORDS:
-            if kw["keyword"] == best_keyword_name:
-                return kw
+    # 트렌드 실패 또는 모두 최근 사용된 경우 → 최근 미사용 키워드 중 랜덤
+    available = [kw for kw in KEYWORDS if kw["keyword"] not in recently_used]
+    if available:
+        print("[DataLab 실패] 미사용 키워드 중 랜덤 선택")
+        return random.choice(available)
 
-    print("[DataLab 실패] 랜덤 키워드 선택")
+    print("[DataLab 실패] 전체 랜덤 선택")
     return random.choice(KEYWORDS)
 
 # ============================================
@@ -338,26 +371,36 @@ def translate_heading_to_english(heading_text):
     return response.content[0].text.strip()
 
 
-def insert_images_after_subheadings(content):
-    """## 소제목마다 이미지 검색 후 소제목 바로 아래에 삽입 (중복 없음)"""
+def append_images_at_end(content, keyword, count=4):
+    """글 마지막에 관련 이미지 count장 추가 (중복 없음)"""
 
-    lines = content.split("\n")
-    result = []
     used_urls = set()
+    images = []
 
-    for line in lines:
-        result.append(line)
+    # 키워드를 영문으로 번역해서 이미지 검색 쿼리 생성
+    base_queries = [
+        keyword,
+        f"{keyword} dental care",
+        "oral health teeth",
+        "dental clinic patient",
+        "healthy teeth smile",
+        "dentist treatment",
+    ]
 
-        if line.startswith("## "):
-            heading_text = line[3:].strip()
-            english_query = translate_heading_to_english(heading_text)
-            print(f"[소제목 번역] {heading_text} → {english_query}")
-            image_md = fetch_unsplash_image(english_query, used_urls)
-            if image_md:
-                result.append("")
-                result.append(image_md)
+    for query_kr in base_queries:
+        if len(images) >= count:
+            break
+        english_query = translate_heading_to_english(query_kr)
+        print(f"[이미지 검색] {query_kr} → {english_query}")
+        image_md = fetch_unsplash_image(english_query, used_urls)
+        if image_md:
+            images.append(image_md)
 
-    return "\n".join(result)
+    if images:
+        footer = "\n\n---\n\n## 관련 사진\n\n" + "\n".join(images)
+        return content + footer
+
+    return content
 
 # ============================================
 # 금지 표현 필터
@@ -377,18 +420,75 @@ def apply_medical_filter(text):
 # 파일 저장
 # ============================================
 
-def save_markdown(keyword, content):
+def convert_to_plain_text(content):
+    """마크다운 → 네이버 블로그용 일반 텍스트 변환"""
+
+    lines = content.split("\n")
+    result = []
+
+    for line in lines:
+        # 제목(#) → 대괄호 소제목으로
+        if line.startswith("# "):
+            result.append(line[2:].strip())
+            result.append("")
+        elif line.startswith("## "):
+            result.append("")
+            result.append(f"[ {line[3:].strip()} ]")
+            result.append("")
+        elif line.startswith("### "):
+            result.append(f"▶ {line[4:].strip()}")
+        # 마크다운 이미지 → URL만 남기기
+        elif line.startswith("!["):
+            # ![alt](url) 에서 url 추출
+            import re
+            match = re.search(r'\!\[.*?\]\((.*?)\)', line)
+            if match:
+                result.append(match.group(1))
+                result.append("")
+        # 크레딧 줄 (*Photo by ...) 제거
+        elif line.startswith("*Photo by "):
+            continue
+        # 구분선 제거
+        elif line.strip() == "---":
+            result.append("")
+        # 굵게(**text**), 기울임(*text*) 기호 제거
+        else:
+            import re
+            line = re.sub(r'\*\*(.*?)\*\*', r'\1', line)
+            line = re.sub(r'\*(.*?)\*', r'\1', line)
+            # 인라인 코드 제거
+            line = re.sub(r'`(.*?)`', r'\1', line)
+            result.append(line)
+
+    # 연속 빈줄 최대 2개로 제한 (모바일 가독성)
+    final = []
+    blank_count = 0
+    for line in result:
+        if line.strip() == "":
+            blank_count += 1
+            if blank_count <= 2:
+                final.append("")
+        else:
+            blank_count = 0
+            final.append(line)
+
+    return "\n".join(final).strip()
+
+
+def save_post(keyword, content):
 
     date_str = datetime.now().strftime("%Y-%m-%d")
 
     safe_keyword = keyword.replace(" ", "-")
 
-    filename = f"{date_str}-{safe_keyword}.md"
+    filename = f"{date_str}-{safe_keyword}.txt"
 
     filepath = os.path.join(POSTS_DIR, filename)
 
+    plain_text = convert_to_plain_text(content)
+
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(content)
+        f.write(plain_text)
 
     print(f"[저장 완료] {filepath}")
 
@@ -410,9 +510,9 @@ def run_blog_generation():
 
     filtered_content = apply_medical_filter(content)
 
-    final_content = insert_images_after_subheadings(filtered_content)
+    final_content = append_images_at_end(filtered_content, keyword_data["keyword"], count=4)
 
-    save_markdown(
+    save_post(
         keyword_data["keyword"],
         final_content
     )
