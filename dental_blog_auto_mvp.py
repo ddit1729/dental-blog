@@ -45,7 +45,8 @@ client = anthropic.Anthropic(
     api_key=os.getenv("ANTHROPIC_API_KEY")
 )
 
-POSTS_DIR = "posts"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+POSTS_DIR = os.path.join(BASE_DIR, "posts")
 
 if not os.path.exists(POSTS_DIR):
     os.makedirs(POSTS_DIR)
@@ -96,6 +97,13 @@ BANNED_WORDS = {
     "부작용 없음": "부작용 가능성은 상담이 필요함",
     "무통": "통증 감소를 고려한",
     "절대": "상황에 따라",
+}
+
+# AI 생성 시 발생하는 오타 교정
+TYPO_CORRECTIONS = {
+    "스케알링": "스케일링",
+    "임플란틀": "임플란트",
+    "사랑이": "사랑니",
 }
 
 # ============================================
@@ -178,9 +186,44 @@ def select_keyword():
 # Claude 블로그 생성
 # ============================================
 
+def load_recent_posts(n=2):
+    """posts/ 폴더에서 참고예시*.md 전부 + 최근 자동생성 글 n개 읽기"""
+
+    if not os.path.exists(POSTS_DIR):
+        return []
+
+    all_files = [f for f in os.listdir(POSTS_DIR) if f.endswith(".md")]
+
+    # 참고예시로 시작하는 파일 전부
+    reference_files = [f for f in all_files if f.startswith("참고예시")]
+
+    # 나머지 최근 n개
+    recent_files = sorted(
+        [f for f in all_files if not f.startswith("참고예시")],
+        reverse=True
+    )[:n]
+
+    posts = []
+    for filename in reference_files + recent_files:
+        filepath = os.path.join(POSTS_DIR, filename)
+        with open(filepath, "r", encoding="utf-8") as f:
+            posts.append(f.read())
+
+    return posts
+
+
 def generate_blog_post(keyword_data):
 
     keyword = keyword_data["keyword"]
+
+    recent_posts = load_recent_posts(n=2)
+
+    if recent_posts:
+        reference_section = "\n\n참고 예시 (아래 글들의 문체와 구성 방식을 참고해서 써줘):\n"
+        for i, post in enumerate(recent_posts, 1):
+            reference_section += f"\n--- 예시 {i} ---\n{post[:1500]}\n"
+    else:
+        reference_section = ""
 
     prompt = f"""
 너는 한국 치과 블로그 전문 작가다.
@@ -209,7 +252,7 @@ def generate_blog_post(keyword_data):
 5. 주의사항
 6. FAQ
 7. 마무리
-"""
+{reference_section}"""
 
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -281,22 +324,18 @@ def translate_heading_to_english(heading_text):
             {
                 "role": "user",
                 "content": (
-                    f"Translate this Korean dental blog heading into a short English Unsplash search query "
-                    f"specifically about dental/oral health (2-3 words only, no explanation, no punctuation, "
-                    f"must be related to dentistry or teeth):\n{heading_text}"
+                    f"Translate this Korean dental blog heading into a specific English Unsplash search query "
+                    f"(2-4 words, no explanation, no punctuation). "
+                    f"Focus on the concrete subject or action in the heading, not just 'dental'. "
+                    f"Examples: '도입부' → 'healthy smile', '주의사항' → 'caution warning sign', "
+                    f"'사랑니 발치' → 'tooth extraction', '음식 섭취' → 'soft food eating', "
+                    f"'FAQ' → 'questions answers':\n{heading_text}"
                 )
             }
         ]
     )
 
-    query = response.content[0].text.strip()
-
-    # 치과 관련 단어가 없으면 dental 접두어 추가
-    dental_words = ["dental", "tooth", "teeth", "gum", "oral", "mouth", "implant", "braces", "cavity"]
-    if not any(word in query.lower() for word in dental_words):
-        query = "dental " + query
-
-    return query
+    return response.content[0].text.strip()
 
 
 def insert_images_after_subheadings(content):
@@ -328,6 +367,9 @@ def apply_medical_filter(text):
 
     for banned, replacement in BANNED_WORDS.items():
         text = text.replace(banned, replacement)
+
+    for typo, correction in TYPO_CORRECTIONS.items():
+        text = text.replace(typo, correction)
 
     return text
 
