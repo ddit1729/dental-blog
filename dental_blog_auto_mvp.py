@@ -5,7 +5,7 @@
 
 """
 기능
-1. 치과 키워드 자동 선택
+1. 네이버 DataLab 트렌드 기반 키워드 자동 선택
 2. Claude API로 블로그 글 생성
 3. 의료광고 위험 표현 필터링
 4. Unsplash 이미지 자동 삽입
@@ -18,14 +18,17 @@ pip install anthropic apscheduler python-dotenv requests
 .env 파일 생성:
 ANTHROPIC_API_KEY=your_api_key
 UNSPLASH_ACCESS_KEY=your_unsplash_key
+NAVER_CLIENT_ID=your_client_id
+NAVER_CLIENT_SECRET=your_client_secret
 
 실행:
 python dental_blog_auto_mvp.py
 """
 
+import json
 import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -96,10 +99,79 @@ BANNED_WORDS = {
 }
 
 # ============================================
+# 네이버 DataLab 트렌드 조회
+# ============================================
+
+def get_naver_trend_scores():
+    """네이버 DataLab 검색어 트렌드 API로 키워드별 최근 1주 평균 검색량 조회"""
+
+    client_id = os.getenv("NAVER_CLIENT_ID")
+    client_secret = os.getenv("NAVER_CLIENT_SECRET")
+
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=7)
+
+    # DataLab API 제한: keywordGroups 최대 5개
+    sampled = random.sample(KEYWORDS, min(5, len(KEYWORDS)))
+    keyword_groups = [
+        {"groupName": kw["keyword"], "keywords": [kw["keyword"]]}
+        for kw in sampled
+    ]
+
+    body = {
+        "startDate": start_date.strftime("%Y-%m-%d"),
+        "endDate": end_date.strftime("%Y-%m-%d"),
+        "timeUnit": "date",
+        "keywordGroups": keyword_groups,
+    }
+
+    try:
+        response = requests.post(
+            "https://openapi.naver.com/v1/datalab/search",
+            headers={
+                "X-Naver-Client-Id": client_id,
+                "X-Naver-Client-Secret": client_secret,
+                "Content-Type": "application/json",
+            },
+            data=json.dumps(body),
+            timeout=10
+        )
+        data = response.json()
+        results = data.get("results", [])
+
+        scores = {}
+        for result in results:
+            keyword = result["title"]
+            values = result.get("data", [])
+            avg_ratio = sum(v["ratio"] for v in values) / len(values) if values else 0
+            scores[keyword] = avg_ratio
+
+        return scores
+
+    except Exception as e:
+        print(f"[DataLab 오류] {e}")
+        return {}
+
+
+# ============================================
 # 키워드 선택
 # ============================================
 
 def select_keyword():
+    """네이버 트렌드 기반으로 검색량 높은 키워드 선택. 실패 시 랜덤 선택."""
+
+    scores = get_naver_trend_scores()
+
+    if scores:
+        best_keyword_name = max(scores, key=scores.get)
+        best_score = scores[best_keyword_name]
+        print(f"[트렌드 Top] {best_keyword_name} (점수: {best_score:.1f})")
+
+        for kw in KEYWORDS:
+            if kw["keyword"] == best_keyword_name:
+                return kw
+
+    print("[DataLab 실패] 랜덤 키워드 선택")
     return random.choice(KEYWORDS)
 
 # ============================================
@@ -141,7 +213,7 @@ def generate_blog_post(keyword_data):
 
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
-        max_tokens=2000,
+        max_tokens=4000,
         messages=[
             {
                 "role": "user",
@@ -159,8 +231,8 @@ def generate_blog_post(keyword_data):
 # Unsplash 이미지 검색
 # ============================================
 
-def fetch_unsplash_image(query):
-    """영문 쿼리로 Unsplash 이미지 검색 후 마크다운 반환"""
+def fetch_unsplash_image(query, used_urls):
+    """영문 쿼리로 Unsplash 이미지 검색 후 마크다운 반환 (중복 제외)"""
 
     access_key = os.getenv("UNSPLASH_ACCESS_KEY")
 
@@ -169,7 +241,7 @@ def fetch_unsplash_image(query):
             "https://api.unsplash.com/search/photos",
             params={
                 "query": query,
-                "per_page": 1,
+                "per_page": 10,
                 "orientation": "landscape",
             },
             headers={"Authorization": f"Client-ID {access_key}"},
@@ -178,9 +250,11 @@ def fetch_unsplash_image(query):
         data = response.json()
         results = data.get("results", [])
 
-        if results:
-            photo = results[0]
+        for photo in results:
             image_url = photo["urls"]["regular"]
+            if image_url in used_urls:
+                continue
+            used_urls.add(image_url)
             alt_text = photo.get("alt_description") or query
             credit_name = photo["user"]["name"]
             credit_link = photo["user"]["links"]["html"]
@@ -207,21 +281,30 @@ def translate_heading_to_english(heading_text):
             {
                 "role": "user",
                 "content": (
-                    f"Translate this Korean dental blog heading into a short English search query "
-                    f"for Unsplash (2-4 words only, no explanation, no punctuation):\n{heading_text}"
+                    f"Translate this Korean dental blog heading into a short English Unsplash search query "
+                    f"specifically about dental/oral health (2-3 words only, no explanation, no punctuation, "
+                    f"must be related to dentistry or teeth):\n{heading_text}"
                 )
             }
         ]
     )
 
-    return response.content[0].text.strip()
+    query = response.content[0].text.strip()
+
+    # 치과 관련 단어가 없으면 dental 접두어 추가
+    dental_words = ["dental", "tooth", "teeth", "gum", "oral", "mouth", "implant", "braces", "cavity"]
+    if not any(word in query.lower() for word in dental_words):
+        query = "dental " + query
+
+    return query
 
 
 def insert_images_after_subheadings(content):
-    """## 소제목마다 이미지 검색 후 소제목 바로 아래에 삽입"""
+    """## 소제목마다 이미지 검색 후 소제목 바로 아래에 삽입 (중복 없음)"""
 
     lines = content.split("\n")
     result = []
+    used_urls = set()
 
     for line in lines:
         result.append(line)
@@ -230,7 +313,7 @@ def insert_images_after_subheadings(content):
             heading_text = line[3:].strip()
             english_query = translate_heading_to_english(heading_text)
             print(f"[소제목 번역] {heading_text} → {english_query}")
-            image_md = fetch_unsplash_image(english_query)
+            image_md = fetch_unsplash_image(english_query, used_urls)
             if image_md:
                 result.append("")
                 result.append(image_md)
