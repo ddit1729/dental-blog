@@ -13,7 +13,7 @@
 6. 주 2회 자동 실행
 
 설치
-pip install anthropic apscheduler python-dotenv requests gspread
+pip install anthropic apscheduler python-dotenv requests gspread google-api-python-client
 
 .env 파일 생성:
 ANTHROPIC_API_KEY=your_api_key
@@ -37,6 +37,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 import anthropic
 from dotenv import load_dotenv
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 # ============================================
 # 환경 설정
@@ -656,10 +657,63 @@ def save_post(keyword, content):
     print(f"[저장 완료] {filepath}")
 
 # ============================================
+# 구글 독스 저장
+# ============================================
+
+def create_google_doc(keyword, plain_text):
+    """구글 독스에 블로그 글 저장 후 공유 링크 반환"""
+
+    try:
+        scopes = [
+            "https://www.googleapis.com/auth/documents",
+            "https://www.googleapis.com/auth/drive",
+        ]
+        creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
+
+        docs_service = build("docs", "v1", credentials=creds)
+        drive_service = build("drive", "v3", credentials=creds)
+
+        # 문서 생성
+        doc = docs_service.documents().create(
+            body={"title": keyword}
+        ).execute()
+        doc_id = doc["documentId"]
+
+        # 내용 삽입
+        docs_service.documents().batchUpdate(
+            documentId=doc_id,
+            body={
+                "requests": [
+                    {
+                        "insertText": {
+                            "location": {"index": 1},
+                            "text": plain_text,
+                        }
+                    }
+                ]
+            }
+        ).execute()
+
+        # 링크 보유자 누구나 열람 가능으로 공유 설정
+        drive_service.permissions().create(
+            fileId=doc_id,
+            body={"type": "anyone", "role": "reader"},
+        ).execute()
+
+        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+        print(f"[구글 독스] 저장 완료: {doc_url}")
+        return doc_url
+
+    except Exception as e:
+        print(f"[구글 독스 오류] {e}")
+        return ""
+
+
+# ============================================
 # 구글 시트 성과 기록
 # ============================================
 
-def log_to_sheets(keyword_data, filename):
+def log_to_sheets(keyword_data, filename, doc_url=""):
     """글 생성 정보를 구글 시트에 한 행으로 기록"""
 
     if not GOOGLE_SHEET_ID:
@@ -675,7 +729,7 @@ def log_to_sheets(keyword_data, filename):
         # 헤더가 없으면 첫 행에 추가
         if sheet.row_count == 0 or sheet.cell(1, 1).value != "날짜":
             sheet.insert_row(
-                ["날짜", "키워드", "카테고리", "지역", "파일명", "조회수", "유입수", "메모"],
+                ["날짜", "키워드", "카테고리", "파일명", "구글독스링크"],
                 index=1
             )
 
@@ -683,11 +737,8 @@ def log_to_sheets(keyword_data, filename):
             datetime.now().strftime("%Y-%m-%d"),
             keyword_data["keyword"],
             keyword_data.get("category", ""),
-            keyword_data.get("area", ""),
             filename,
-            "",  # 조회수 (수동 입력)
-            "",  # 유입수 (수동 입력)
-            "",  # 메모 (수동 입력)
+            doc_url,
         ]
         sheet.append_row(row)
         print(f"[구글 시트] 기록 완료: {keyword_data['keyword']}")
@@ -720,7 +771,11 @@ def run_blog_generation():
     filename = f"{date_str}-{keyword_data['keyword'].replace(' ', '-')}.txt"
 
     save_post(keyword_data["keyword"], final_content)
-    log_to_sheets(keyword_data, filename)
+
+    plain_text = convert_to_plain_text(final_content)
+    doc_url = create_google_doc(keyword_data["keyword"], plain_text)
+
+    log_to_sheets(keyword_data, filename, doc_url)
 
     print("[완료] 블로그 글 생성 완료")
 
