@@ -51,11 +51,13 @@ client = anthropic.Anthropic(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POSTS_DIR = os.path.join(BASE_DIR, "posts")
+BLOG_DIR = os.path.join(POSTS_DIR, "blog")
+META_DIR = os.path.join(POSTS_DIR, "meta")
 GOOGLE_CREDENTIALS_FILE = os.path.join(BASE_DIR, "dental-blog-496501-bbeb7be325ed.json")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
-if not os.path.exists(POSTS_DIR):
-    os.makedirs(POSTS_DIR)
+for d in [BLOG_DIR, META_DIR]:
+    os.makedirs(d, exist_ok=True)
 
 # ============================================
 # 치과 키워드 DB
@@ -216,12 +218,11 @@ def get_naver_trend_scores():
 def get_recently_used_keywords(limit=15):
     """최근 limit개 게시글에서 사용된 키워드 목록 반환"""
 
-    if not os.path.exists(POSTS_DIR):
+    if not os.path.exists(BLOG_DIR):
         return set()
 
     files = sorted(
-        [f for f in os.listdir(POSTS_DIR)
-         if f.endswith(".md") and not f.startswith("참고예시")],
+        [f for f in os.listdir(BLOG_DIR) if f.endswith(".txt")],
         reverse=True
     )[:limit]
 
@@ -302,25 +303,19 @@ def select_keyword():
 # ============================================
 
 def load_recent_posts(n=2):
-    """posts/ 폴더에서 참고예시*.md 전부 + 최근 자동생성 글 n개 읽기"""
+    """posts/blog/ 폴더에서 최근 자동생성 글 n개 읽기"""
 
-    if not os.path.exists(POSTS_DIR):
+    if not os.path.exists(BLOG_DIR):
         return []
 
-    all_files = [f for f in os.listdir(POSTS_DIR) if f.endswith(".md")]
-
-    # 참고예시로 시작하는 파일 전부
-    reference_files = [f for f in all_files if f.startswith("참고예시")]
-
-    # 나머지 최근 n개
     recent_files = sorted(
-        [f for f in all_files if not f.startswith("참고예시")],
+        [f for f in os.listdir(BLOG_DIR) if f.endswith(".txt")],
         reverse=True
     )[:n]
 
     posts = []
-    for filename in reference_files + recent_files:
-        filepath = os.path.join(POSTS_DIR, filename)
+    for filename in recent_files:
+        filepath = os.path.join(BLOG_DIR, filename)
         with open(filepath, "r", encoding="utf-8") as f:
             posts.append(f.read())
 
@@ -558,16 +553,14 @@ def apply_medical_filter(text):
 # 파일 저장
 # ============================================
 
-def wrap_for_mobile(text, width=15):
-    """모바일 가운데 정렬 기준 한 줄 15자 이내 줄바꿈"""
+def wrap_for_mobile(text):
+    """마침표·느낌표·물음표 기준으로 줄바꿈 (문장 중간 끊김 없음)"""
+    import re
     if not text.strip():
         return text
-    lines = []
-    while len(text) > width:
-        lines.append(text[:width])
-        text = text[width:]
-    lines.append(text)
-    return "\n".join(lines)
+    # 문장 부호 뒤에서 분리 (부호는 앞 문장에 붙임)
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    return "\n".join(s.strip() for s in sentences if s.strip())
 
 
 def convert_to_plain_text(content):
@@ -638,23 +631,22 @@ def save_post(keyword, content):
 
     filename = f"{date_str}-{safe_keyword}.txt"
 
-    filepath = os.path.join(POSTS_DIR, filename)
+    filepath = os.path.join(BLOG_DIR, filename)
+    meta_filepath = os.path.join(META_DIR, filename)
 
     meta_description = generate_meta_description(keyword, content)
     print(f"[메타 디스크립션] {meta_description}")
 
     plain_text = convert_to_plain_text(content)
 
-    header = (
-        f"[SEO 메타 디스크립션]\n"
-        f"{meta_description}\n"
-        f"{'=' * 40}\n\n"
-    )
-
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(header + plain_text)
+        f.write(plain_text)
+
+    with open(meta_filepath, "w", encoding="utf-8") as f:
+        f.write(meta_description)
 
     print(f"[저장 완료] {filepath}")
+    print(f"[메타 저장 완료] {meta_filepath}")
 
 # ============================================
 # 구글 독스 저장
@@ -663,23 +655,29 @@ def save_post(keyword, content):
 def create_google_doc(keyword, plain_text):
     """구글 독스에 블로그 글 저장 후 공유 링크 반환"""
 
+    import traceback
+
+    scopes = [
+        "https://www.googleapis.com/auth/documents",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
+
+    docs_service = build("docs", "v1", credentials=creds)
+    drive_service = build("drive", "v3", credentials=creds)
+
     try:
-        scopes = [
-            "https://www.googleapis.com/auth/documents",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
-
-        docs_service = build("docs", "v1", credentials=creds)
-        drive_service = build("drive", "v3", credentials=creds)
-
-        # 문서 생성
         doc = docs_service.documents().create(
             body={"title": keyword}
         ).execute()
-        doc_id = doc["documentId"]
+    except Exception as e:
+        print(f"[구글 독스 오류] 문서 생성 실패: {e}")
+        print(traceback.format_exc())
+        return ""
 
-        # 내용 삽입
+    doc_id = doc["documentId"]
+
+    try:
         docs_service.documents().batchUpdate(
             documentId=doc_id,
             body={
@@ -693,20 +691,22 @@ def create_google_doc(keyword, plain_text):
                 ]
             }
         ).execute()
+    except Exception as e:
+        print(f"[구글 독스 오류] 내용 삽입 실패: {e}")
+        print(traceback.format_exc())
 
-        # 링크 보유자 누구나 열람 가능으로 공유 설정
+    try:
         drive_service.permissions().create(
             fileId=doc_id,
             body={"type": "anyone", "role": "reader"},
         ).execute()
-
-        doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
-        print(f"[구글 독스] 저장 완료: {doc_url}")
-        return doc_url
-
     except Exception as e:
-        print(f"[구글 독스 오류] {e}")
-        return ""
+        print(f"[구글 독스 오류] 공유 설정 실패: {e}")
+        print(traceback.format_exc())
+
+    doc_url = f"https://docs.google.com/document/d/{doc_id}/edit"
+    print(f"[구글 독스] 저장 완료: {doc_url}")
+    return doc_url
 
 
 # ============================================
@@ -726,12 +726,14 @@ def log_to_sheets(keyword_data, filename, doc_url=""):
         gc = gspread.authorize(creds)
         sheet = gc.open_by_key(GOOGLE_SHEET_ID).sheet1
 
-        # 헤더가 없으면 첫 행에 추가
-        if sheet.row_count == 0 or sheet.cell(1, 1).value != "날짜":
-            sheet.insert_row(
-                ["날짜", "키워드", "카테고리", "파일명", "구글독스링크"],
-                index=1
-            )
+        # 헤더 확인 및 최신 형식으로 업데이트
+        HEADERS = ["날짜", "키워드", "카테고리", "파일명", "구글독스링크"]
+        first_row = sheet.row_values(1)
+        if first_row != HEADERS:
+            if not first_row:
+                sheet.insert_row(HEADERS, index=1)
+            else:
+                sheet.update("A1", [HEADERS])
 
         row = [
             datetime.now().strftime("%Y-%m-%d"),
