@@ -55,11 +55,9 @@ BLOG_DIR = os.path.join(POSTS_DIR, "blog")
 META_DIR = os.path.join(POSTS_DIR, "meta")
 HOOKS_DIR = os.path.join(POSTS_DIR, "hooks")
 _credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-if _credentials_json:
-    GOOGLE_CREDENTIALS_INFO = json.loads(_credentials_json)
-else:
-    with open(os.path.join(BASE_DIR, "dental-blog-496501-bbeb7be325ed.json"), "r", encoding="utf-8") as _f:
-        GOOGLE_CREDENTIALS_INFO = json.load(_f)
+if not _credentials_json:
+    raise EnvironmentError("GOOGLE_CREDENTIALS_JSON 환경변수가 설정되지 않았습니다.")
+GOOGLE_CREDENTIALS_INFO = json.loads(_credentials_json)
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
 for d in [BLOG_DIR, META_DIR, HOOKS_DIR]:
