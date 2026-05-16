@@ -13,13 +13,14 @@
 6. 주 2회 자동 실행
 
 설치
-pip install anthropic apscheduler python-dotenv requests
+pip install anthropic apscheduler python-dotenv requests gspread
 
 .env 파일 생성:
 ANTHROPIC_API_KEY=your_api_key
 UNSPLASH_ACCESS_KEY=your_unsplash_key
 NAVER_CLIENT_ID=your_client_id
 NAVER_CLIENT_SECRET=your_client_secret
+GOOGLE_SHEET_ID=your_google_sheet_id
 
 실행:
 python dental_blog_auto_mvp.py
@@ -30,10 +31,12 @@ import os
 import random
 from datetime import datetime, timedelta
 
+import gspread
 import requests
 from apscheduler.schedulers.blocking import BlockingScheduler
 import anthropic
 from dotenv import load_dotenv
+from google.oauth2.service_account import Credentials
 
 # ============================================
 # 환경 설정
@@ -47,6 +50,8 @@ client = anthropic.Anthropic(
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POSTS_DIR = os.path.join(BASE_DIR, "posts")
+GOOGLE_CREDENTIALS_FILE = os.path.join(BASE_DIR, "dental-blog-496501-bbeb7be325ed.json")
+GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
 if not os.path.exists(POSTS_DIR):
     os.makedirs(POSTS_DIR)
@@ -56,34 +61,76 @@ if not os.path.exists(POSTS_DIR):
 # ============================================
 
 KEYWORDS = [
-    {
-        "keyword": "사랑니 발치 후 음식",
-        "category": "관리"
-    },
-    {
-        "keyword": "임플란트 통증 기간",
-        "category": "시술"
-    },
-    {
-        "keyword": "이가 시린 이유",
-        "category": "증상"
-    },
-    {
-        "keyword": "스케일링 후 식사",
-        "category": "관리"
-    },
-    {
-        "keyword": "충치 초기 증상",
-        "category": "증상"
-    },
-    {
-        "keyword": "교정 유지장치 세척",
-        "category": "교정"
-    },
-    {
-        "keyword": "신경치료 통증",
-        "category": "시술"
-    },
+    # 관리
+    {"keyword": "사랑니 발치 후 음식", "category": "관리", "seasons": []},
+    {"keyword": "스케일링 후 식사", "category": "관리", "seasons": []},
+    {"keyword": "치아 미백 후 관리", "category": "관리", "seasons": []},
+    {"keyword": "임플란트 관리 방법", "category": "관리", "seasons": []},
+    {"keyword": "교정 중 칫솔질", "category": "관리", "seasons": []},
+    {"keyword": "발치 후 지혈 방법", "category": "관리", "seasons": []},
+    {"keyword": "치실 사용법", "category": "관리", "seasons": []},
+    {"keyword": "전동칫솔 올바른 사용법", "category": "관리", "seasons": []},
+    {"keyword": "틀니 세척 방법", "category": "관리", "seasons": []},
+
+    # 증상
+    {"keyword": "이가 시린 이유", "category": "증상", "seasons": ["12", "1", "2"]},  # 겨울 - 찬 바람
+    {"keyword": "충치 초기 증상", "category": "증상", "seasons": []},
+    {"keyword": "잇몸 붓는 이유", "category": "증상", "seasons": []},
+    {"keyword": "이가 흔들리는 이유", "category": "증상", "seasons": []},
+    {"keyword": "입냄새 원인", "category": "증상", "seasons": []},
+    {"keyword": "이 시림 치료", "category": "증상", "seasons": ["12", "1", "2"]},
+    {"keyword": "턱 통증 원인", "category": "증상", "seasons": []},
+    {"keyword": "잇몸 출혈 원인", "category": "증상", "seasons": []},
+    {"keyword": "치아 깨짐 대처", "category": "증상", "seasons": []},
+
+    # 시술
+    {"keyword": "임플란트 통증 기간", "category": "시술", "seasons": []},
+    {"keyword": "신경치료 통증", "category": "시술", "seasons": []},
+    {"keyword": "스케일링 주기", "category": "시술", "seasons": ["3", "9"]},  # 봄·가을 정기검진
+    {"keyword": "치아 미백 종류", "category": "시술", "seasons": ["5", "6"]},  # 봄·여름 미용 관심
+    {"keyword": "임플란트 수술 과정", "category": "시술", "seasons": []},
+    {"keyword": "잇몸 치료 종류", "category": "시술", "seasons": []},
+    {"keyword": "사랑니 발치 과정", "category": "시술", "seasons": []},
+    {"keyword": "라미네이트 치료", "category": "시술", "seasons": ["5", "6"]},  # 봄·여름 미용 관심
+
+    # 교정
+    {"keyword": "교정 유지장치 세척", "category": "교정", "seasons": []},
+    {"keyword": "투명교정 장단점", "category": "교정", "seasons": ["2", "3"]},  # 새학기
+    {"keyword": "치아교정 음식 제한", "category": "교정", "seasons": []},
+    {"keyword": "교정 기간 단축 방법", "category": "교정", "seasons": []},
+    {"keyword": "교정 후 유지장치 기간", "category": "교정", "seasons": []},
+
+    # 소아·청소년
+    {"keyword": "어린이 충치 예방", "category": "소아", "seasons": ["7", "8"]},  # 여름방학
+    {"keyword": "실란트 치료 대상", "category": "소아", "seasons": ["7", "8"]},  # 여름방학
+    {"keyword": "아이 첫 치과 방문 시기", "category": "소아", "seasons": []},
+
+    # 노인·특수
+    {"keyword": "임플란트 나이 제한", "category": "노인", "seasons": []},
+    {"keyword": "틀니 vs 임플란트 비교", "category": "노인", "seasons": []},
+    {"keyword": "노인 구강 건강 관리", "category": "노인", "seasons": []},
+
+    # 계절 특화
+    {"keyword": "명절 음식 치아 주의", "category": "계절", "seasons": ["1", "9"]},   # 설·추석
+    {"keyword": "여름 냉음료 치아 시림", "category": "계절", "seasons": ["6", "7", "8"]},
+    {"keyword": "겨울 치아 시림 예방", "category": "계절", "seasons": ["11", "12", "1"]},
+    {"keyword": "새학기 교정 시작 시기", "category": "계절", "seasons": ["2", "3"]},
+
+    # 로컬 — 위례·거여·문정 + 인근 (송파구 일대)
+    {"keyword": "위례 치과 스케일링", "category": "로컬", "seasons": [], "local": True, "area": "위례"},
+    {"keyword": "위례 임플란트 비용", "category": "로컬", "seasons": [], "local": True, "area": "위례"},
+    {"keyword": "위례 사랑니 발치", "category": "로컬", "seasons": [], "local": True, "area": "위례"},
+    {"keyword": "거여 치과 추천", "category": "로컬", "seasons": [], "local": True, "area": "거여"},
+    {"keyword": "거여 충치 치료", "category": "로컬", "seasons": [], "local": True, "area": "거여"},
+    {"keyword": "문정 치과 교정", "category": "로컬", "seasons": [], "local": True, "area": "문정"},
+    {"keyword": "문정 임플란트", "category": "로컬", "seasons": [], "local": True, "area": "문정"},
+    {"keyword": "송파 스케일링 잘하는 곳", "category": "로컬", "seasons": [], "local": True, "area": "송파"},
+    {"keyword": "송파 신경치료", "category": "로컬", "seasons": [], "local": True, "area": "송파"},
+    {"keyword": "장지 치과", "category": "로컬", "seasons": [], "local": True, "area": "장지"},
+    {"keyword": "복정 치과 임플란트", "category": "로컬", "seasons": [], "local": True, "area": "복정"},
+    {"keyword": "마천 치과 교정", "category": "로컬", "seasons": [], "local": True, "area": "마천"},
+    {"keyword": "오금 치과 충치", "category": "로컬", "seasons": [], "local": True, "area": "오금"},
+    {"keyword": "가락 치과 스케일링", "category": "로컬", "seasons": [], "local": True, "area": "가락"},
 ]
 
 # ============================================
@@ -188,31 +235,65 @@ def get_recently_used_keywords(limit=15):
     return used
 
 
+def get_seasonal_keywords():
+    """현재 월 기준으로 계절 태그가 맞는 키워드 반환"""
+    current_month = str(datetime.now().month)
+    return [kw for kw in KEYWORDS if current_month in kw.get("seasons", [])]
+
+
 def select_keyword():
-    """네이버 트렌드 기반으로 검색량 높은 키워드 선택 (최근 15개 중복 제외). 실패 시 랜덤 선택."""
+    """키워드 선택 우선순위:
+    1. 계절 키워드 + 네이버 트렌드 점수 높은 것
+    2. 계절 키워드 중 미사용 랜덤
+    3. 전체 키워드 중 트렌드 점수 높은 것
+    4. 전체 미사용 키워드 중 랜덤
+    5. 전체 랜덤
+    """
 
     recently_used = get_recently_used_keywords(limit=15)
     scores = get_naver_trend_scores()
+    seasonal = get_seasonal_keywords()
+    seasonal_names = {kw["keyword"] for kw in seasonal}
 
-    if scores:
-        # 점수 높은 순으로 정렬 후 최근 사용 안 된 키워드 선택
-        sorted_keywords = sorted(scores, key=scores.get, reverse=True)
-        for keyword_name in sorted_keywords:
-            if keyword_name not in recently_used:
-                print(f"[트렌드 선택] {keyword_name} (점수: {scores[keyword_name]:.1f})")
-                for kw in KEYWORDS:
-                    if kw["keyword"] == keyword_name:
-                        return kw
-            else:
-                print(f"[중복 건너뜀] {keyword_name}")
+    def pick_by_score(candidates):
+        """candidates 중 트렌드 점수 높은 미사용 키워드 반환"""
+        available = [kw for kw in candidates if kw["keyword"] not in recently_used]
+        if scores and available:
+            scored = [(kw, scores.get(kw["keyword"], 0)) for kw in available]
+            scored.sort(key=lambda x: x[1], reverse=True)
+            best_kw, best_score = scored[0]
+            if best_score > 0:
+                print(f"[트렌드 선택] {best_kw['keyword']} (점수: {best_score:.1f})")
+                return best_kw
+        return None
 
-    # 트렌드 실패 또는 모두 최근 사용된 경우 → 최근 미사용 키워드 중 랜덤
+    # 1. 계절 키워드 + 트렌드
+    if seasonal:
+        result = pick_by_score(seasonal)
+        if result:
+            return result
+
+        # 2. 계절 키워드 중 미사용 랜덤
+        available_seasonal = [kw for kw in seasonal if kw["keyword"] not in recently_used]
+        if available_seasonal:
+            chosen = random.choice(available_seasonal)
+            print(f"[계절 랜덤] {chosen['keyword']}")
+            return chosen
+
+    # 3. 전체 키워드 + 트렌드
+    result = pick_by_score(KEYWORDS)
+    if result:
+        return result
+
+    # 4. 전체 미사용 랜덤
     available = [kw for kw in KEYWORDS if kw["keyword"] not in recently_used]
     if available:
-        print("[DataLab 실패] 미사용 키워드 중 랜덤 선택")
-        return random.choice(available)
+        chosen = random.choice(available)
+        print(f"[미사용 랜덤] {chosen['keyword']}")
+        return chosen
 
-    print("[DataLab 실패] 전체 랜덤 선택")
+    # 5. 전체 랜덤
+    print("[전체 랜덤] 모든 키워드 최근 사용됨")
     return random.choice(KEYWORDS)
 
 # ============================================
@@ -248,6 +329,8 @@ def load_recent_posts(n=2):
 def generate_blog_post(keyword_data):
 
     keyword = keyword_data["keyword"]
+    is_local = keyword_data.get("local", False)
+    area = keyword_data.get("area", "")
 
     recent_posts = load_recent_posts(n=2)
 
@@ -258,33 +341,61 @@ def generate_blog_post(keyword_data):
     else:
         reference_section = ""
 
+    local_section = ""
+    if is_local and area:
+        local_section = f"""
+[로컬 SEO 조건]
+- 글 전체에서 "{area}" 지역명을 3~5회 자연스럽게 언급 (억지스럽지 않게)
+- 도입부나 마무리에 "{area}" 인근 주민이 공감할 수 있는 상황 묘사 포함
+- 지역 특성과 연결되는 내용 가능하면 포함 (예: 출퇴근, 주거 환경 등)
+"""
+
     prompt = f"""
 너는 한국 치과 블로그 전문 작가다.
+SEO(네이버·구글 검색 노출)와 GEO(ChatGPT·Perplexity 등 AI 검색 인용) 둘 다 최적화된 글을 써야 한다.
 
 주제:
 "{keyword}"
 
-조건:
-- 네이버 블로그 스타일
-- 환자 눈높이 설명
-- 과장 금지
-- 광고 느낌 금지
-- 의료광고법 위반 표현 금지
-- 자연스러운 한국어
+[SEO 조건]
+- 제목, 첫 문단, 소제목에 핵심 키워드를 자연스럽게 배치
+- 연관 검색어 2~3개를 본문 안에 자연스럽게 녹여서 사용 (예: 주제가 "스케일링"이면 "치석 제거", "잇몸 관리", "구강 위생" 등)
+- 네이버 블로그 스타일, 자연스러운 한국어
 - 1800자 이상
-- 소제목 포함
-- FAQ 3개 포함
-- 마크다운 형식
-- 제목부터 작성
+- 소제목 포함, 리스트·단계별 설명 활용
+- 체류시간을 높이는 흥미로운 도입부
+{local_section}
+[GEO 조건]
+- 도입부 바로 다음에 핵심 답변을 2~3문장으로 먼저 요약 (AI가 인용하기 좋은 형태)
+- 구체적인 숫자·기간 포함 (예: "2시간", "3~5일", "하루 2회")
+- FAQ는 반드시 "Q: ... / A: ..." 형태로 직접 답변 3개
+- 사실 기반 서술, 신뢰할 수 있는 말투
+- 비교가 필요한 주제(예: 치료 방법 선택, 증상 단계 구분 등)에서는 표(마크다운 테이블) 사용
+
+[공통 조건]
+- 치과를 전혀 모르는 일반인도 쉽게 이해할 수 있는 말투
+- 전문 의학 용어는 반드시 쉬운 말로 풀어서 설명
+- 친근하고 편한 문체, 짧고 읽기 쉬운 문장
+- 과장 금지, 광고 느낌 금지, 의료광고법 위반 표현 금지
+- 마크다운 형식, 제목부터 작성
+
+제목 작성 규칙:
+- 키워드를 제목 앞쪽에 배치
+- 정보형 우선, 질문형은 자연스러울 때만 허용
+- 20자 이내
+- 광고 느낌 없이 환자 눈높이로
+- 친근하고 실용적인 정보 제공 느낌
+- 예시: '미백 시술 전에 알아두면 좋은 것들', '스케일링 후 식사, 이렇게 하세요', '사랑니 발치 후 회복 기간 정리'
 
 구조:
-1. 제목
-2. 도입부
-3. 원인/설명
-4. 관리 방법
-5. 주의사항
-6. FAQ
-7. 마무리
+1. 제목 (위 규칙 적용)
+2. 도입부 (공감 가는 일상적 상황)
+3. 핵심 요약 (2~3문장, AI 인용용)
+4. 원인/설명 (쉬운 말로)
+5. 관리 방법 (구체적 수치 포함, 단계별 리스트)
+6. 주의사항
+7. FAQ (Q/A 형식, 3개)
+8. 마무리
 {reference_section}"""
 
     response = client.messages.create(
@@ -403,6 +514,32 @@ def append_images_at_end(content, keyword, count=4):
     return content
 
 # ============================================
+# 메타 디스크립션 생성
+# ============================================
+
+def generate_meta_description(keyword, content):
+    """본문 기반으로 네이버·구글 검색 결과에 노출될 메타 디스크립션 생성 (140자 이내)"""
+
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=100,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"아래 치과 블로그 글의 메타 디스크립션을 작성해줘.\n"
+                    f"조건: 키워드 '{keyword}' 포함, 140자 이내, 한 문장, 광고 느낌 없이 궁금증을 유발하는 문체.\n"
+                    f"설명 없이 메타 디스크립션 텍스트만 출력.\n\n"
+                    f"본문 앞부분:\n{content[:800]}"
+                )
+            }
+        ]
+    )
+
+    return response.content[0].text.strip()
+
+
+# ============================================
 # 금지 표현 필터
 # ============================================
 
@@ -420,14 +557,28 @@ def apply_medical_filter(text):
 # 파일 저장
 # ============================================
 
+def wrap_for_mobile(text, width=15):
+    """모바일 가운데 정렬 기준 한 줄 15자 이내 줄바꿈"""
+    if not text.strip():
+        return text
+    lines = []
+    while len(text) > width:
+        lines.append(text[:width])
+        text = text[width:]
+    lines.append(text)
+    return "\n".join(lines)
+
+
 def convert_to_plain_text(content):
     """마크다운 → 네이버 블로그용 일반 텍스트 변환"""
+
+    import re
 
     lines = content.split("\n")
     result = []
 
     for line in lines:
-        # 제목(#) → 대괄호 소제목으로
+        # 제목(#) → 대괄호 소제목으로 (줄바꿈 제외)
         if line.startswith("# "):
             result.append(line[2:].strip())
             result.append("")
@@ -437,28 +588,31 @@ def convert_to_plain_text(content):
             result.append("")
         elif line.startswith("### "):
             result.append(f"▶ {line[4:].strip()}")
-        # 마크다운 이미지 → URL만 남기기
+        # 마크다운 이미지 → URL만 남기기 (줄바꿈 제외)
         elif line.startswith("!["):
-            # ![alt](url) 에서 url 추출
-            import re
             match = re.search(r'\!\[.*?\]\((.*?)\)', line)
             if match:
                 result.append(match.group(1))
                 result.append("")
-        # 크레딧 줄 (*Photo by ...) 제거
+        # 크레딧 줄 제거
         elif line.startswith("*Photo by "):
             continue
         # 구분선 제거
         elif line.strip() == "---":
             result.append("")
-        # 굵게(**text**), 기울임(*text*) 기호 제거
+        # 표(|로 시작) → 줄바꿈 제외
+        elif line.strip().startswith("|"):
+            line = re.sub(r'\*\*(.*?)\*\*', r'\1', line)
+            result.append(line)
+        # 일반 본문 → 마크다운 제거 후 15자 줄바꿈
         else:
-            import re
             line = re.sub(r'\*\*(.*?)\*\*', r'\1', line)
             line = re.sub(r'\*(.*?)\*', r'\1', line)
-            # 인라인 코드 제거
             line = re.sub(r'`(.*?)`', r'\1', line)
-            result.append(line)
+            if line.strip():
+                result.append(wrap_for_mobile(line.strip()))
+            else:
+                result.append("")
 
     # 연속 빈줄 최대 2개로 제한 (모바일 가독성)
     final = []
@@ -485,12 +639,62 @@ def save_post(keyword, content):
 
     filepath = os.path.join(POSTS_DIR, filename)
 
+    meta_description = generate_meta_description(keyword, content)
+    print(f"[메타 디스크립션] {meta_description}")
+
     plain_text = convert_to_plain_text(content)
 
+    header = (
+        f"[SEO 메타 디스크립션]\n"
+        f"{meta_description}\n"
+        f"{'=' * 40}\n\n"
+    )
+
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(plain_text)
+        f.write(header + plain_text)
 
     print(f"[저장 완료] {filepath}")
+
+# ============================================
+# 구글 시트 성과 기록
+# ============================================
+
+def log_to_sheets(keyword_data, filename):
+    """글 생성 정보를 구글 시트에 한 행으로 기록"""
+
+    if not GOOGLE_SHEET_ID:
+        print("[구글 시트] GOOGLE_SHEET_ID 미설정, 건너뜀")
+        return
+
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
+        gc = gspread.authorize(creds)
+        sheet = gc.open_by_key(GOOGLE_SHEET_ID).sheet1
+
+        # 헤더가 없으면 첫 행에 추가
+        if sheet.row_count == 0 or sheet.cell(1, 1).value != "날짜":
+            sheet.insert_row(
+                ["날짜", "키워드", "카테고리", "지역", "파일명", "조회수", "유입수", "메모"],
+                index=1
+            )
+
+        row = [
+            datetime.now().strftime("%Y-%m-%d"),
+            keyword_data["keyword"],
+            keyword_data.get("category", ""),
+            keyword_data.get("area", ""),
+            filename,
+            "",  # 조회수 (수동 입력)
+            "",  # 유입수 (수동 입력)
+            "",  # 메모 (수동 입력)
+        ]
+        sheet.append_row(row)
+        print(f"[구글 시트] 기록 완료: {keyword_data['keyword']}")
+
+    except Exception as e:
+        print(f"[구글 시트 오류] {e}")
+
 
 # ============================================
 # 전체 작업 실행
@@ -512,10 +716,11 @@ def run_blog_generation():
 
     final_content = append_images_at_end(filtered_content, keyword_data["keyword"], count=4)
 
-    save_post(
-        keyword_data["keyword"],
-        final_content
-    )
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"{date_str}-{keyword_data['keyword'].replace(' ', '-')}.txt"
+
+    save_post(keyword_data["keyword"], final_content)
+    log_to_sheets(keyword_data, filename)
 
     print("[완료] 블로그 글 생성 완료")
 
