@@ -864,12 +864,15 @@ scheduler.add_job(
 # ============================================
 
 if __name__ == "__main__":
+    import sys
 
-    print("치과 블로그 자동 생성기 실행 중...")
-    print("매주 월/목 오전 9시에 자동 생성됩니다.")
-
-    # 테스트용 즉시 실행
-    run_blog_generation()
-
-    # 스케줄러 시작
-    scheduler.start()
+    if "--once" in sys.argv:
+        # GitHub Actions: 한 번만 실행
+        print("블로그 글 1회 생성 시작...")
+        run_blog_generation()
+    else:
+        # 로컬: 스케줄러로 실행
+        print("치과 블로그 자동 생성기 실행 중...")
+        print("매주 월/목 오전 9시에 자동 생성됩니다.")
+        run_blog_generation()
+        scheduler.start()

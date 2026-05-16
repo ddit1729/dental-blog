@@ -1,0 +1,43 @@
+name: 치과 블로그 자동 생성
+
+on:
+  schedule:
+    - cron: "0 0 * * 1"  # 매주 월요일 오전 9시 (KST = UTC+9)
+    - cron: "0 0 * * 4"  # 매주 목요일 오전 9시 (KST = UTC+9)
+  workflow_dispatch:       # 수동 실행 가능
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 패키지 설치
+        run: pip install anthropic apscheduler python-dotenv requests gspread google-api-python-client
+
+      - name: 서비스 계정 키 파일 생성
+        run: echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > dental-blog-496501-bbeb7be325ed.json
+
+      - name: 블로그 글 생성
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          UNSPLASH_ACCESS_KEY: ${{ secrets.UNSPLASH_ACCESS_KEY }}
+          NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
+          GOOGLE_SHEET_ID: ${{ secrets.GOOGLE_SHEET_ID }}
+        run: python dental_blog_auto_mvp.py --once
+
+      - name: 생성된 파일 커밋
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add posts/
+          git diff --cached --quiet || git commit -m "feat: 블로그 글 자동 생성 $(date '+%Y-%m-%d')"
+          git push
