@@ -54,16 +54,12 @@ POSTS_DIR = os.path.join(BASE_DIR, "posts")
 BLOG_DIR = os.path.join(POSTS_DIR, "blog")
 META_DIR = os.path.join(POSTS_DIR, "meta")
 HOOKS_DIR = os.path.join(POSTS_DIR, "hooks")
-import tempfile
-
 _credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
 if _credentials_json:
-    _tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-    _tmp.write(_credentials_json)
-    _tmp.close()
-    GOOGLE_CREDENTIALS_FILE = _tmp.name
+    GOOGLE_CREDENTIALS_INFO = json.loads(_credentials_json)
 else:
-    GOOGLE_CREDENTIALS_FILE = os.path.join(BASE_DIR, "dental-blog-496501-bbeb7be325ed.json")
+    with open(os.path.join(BASE_DIR, "dental-blog-496501-bbeb7be325ed.json"), "r", encoding="utf-8") as _f:
+        GOOGLE_CREDENTIALS_INFO = json.load(_f)
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
 
 for d in [BLOG_DIR, META_DIR, HOOKS_DIR]:
@@ -717,7 +713,7 @@ def create_google_doc(keyword, plain_text):
         "https://www.googleapis.com/auth/documents",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
+    creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_INFO, scopes=scopes)
 
     docs_service = build("docs", "v1", credentials=creds)
     drive_service = build("drive", "v3", credentials=creds)
@@ -778,7 +774,7 @@ def log_to_sheets(keyword_data, filename, doc_url=""):
 
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_file(GOOGLE_CREDENTIALS_FILE, scopes=scopes)
+        creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_INFO, scopes=scopes)
         gc = gspread.authorize(creds)
         sheet = gc.open_by_key(GOOGLE_SHEET_ID).sheet1
 
