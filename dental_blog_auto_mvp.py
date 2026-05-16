@@ -837,8 +837,8 @@ def run_blog_generation():
         f.write(hooks)
     print(f"[훅 저장 완료] {hooks_filepath}")
 
-    # plain_text = convert_to_plain_text(final_content)
-    doc_url = ""  # create_google_doc(keyword_data["keyword"], plain_text)
+    plain_text = convert_to_plain_text(final_content)
+    doc_url = create_google_doc(keyword_data["keyword"], plain_text)
 
     log_to_sheets(keyword_data, filename, doc_url)
 
