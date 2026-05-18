@@ -13,7 +13,7 @@
 6. 주 2회 자동 실행
 
 설치
-pip install anthropic apscheduler python-dotenv requests gspread google-api-python-client
+pip install anthropic apscheduler python-dotenv requests gspread google-api-python-client pytrends
 
 .env 파일 생성:
 ANTHROPIC_API_KEY=your_api_key
@@ -230,6 +230,54 @@ def get_naver_trend_scores():
 
 
 # ============================================
+# 구글 트렌드 키워드 수집
+# ============================================
+
+# 치과 관련 시드 키워드 (구글 트렌드 연관 검색어 탐색용)
+TREND_SEED_KEYWORDS = ["치과", "임플란트", "스케일링", "치아교정", "충치"]
+
+def get_google_trends_keywords(top_n=5):
+    """구글 트렌드에서 치과 관련 급상승 키워드 수집 후 상위 n개 반환"""
+
+    try:
+        from pytrends.request import TrendReq
+        pytrends = TrendReq(hl="ko", tz=540, timeout=(10, 25))
+
+        discovered = {}
+
+        for seed in TREND_SEED_KEYWORDS:
+            try:
+                pytrends.build_payload([seed], timeframe="now 7-d", geo="KR")
+                related = pytrends.related_queries()
+                rising_df = related.get(seed, {}).get("rising")
+
+                if rising_df is not None and not rising_df.empty:
+                    for _, row in rising_df.head(3).iterrows():
+                        query = row["query"]
+                        value = row["value"]  # 급상승 수치
+                        if query not in discovered:
+                            discovered[query] = value
+                        else:
+                            discovered[query] = max(discovered[query], value)
+
+            except Exception:
+                continue
+
+        # 급상승 수치 내림차순 정렬
+        sorted_keywords = sorted(discovered.items(), key=lambda x: x[1], reverse=True)
+        result = [k for k, _ in sorted_keywords[:top_n]]
+        print(f"[구글 트렌드] 수집된 키워드: {result}")
+        return result
+
+    except ImportError:
+        print("[구글 트렌드] pytrends 미설치, 건너뜀")
+        return []
+    except Exception as e:
+        print(f"[구글 트렌드 오류] {e}")
+        return []
+
+
+# ============================================
 # 키워드 선택
 # ============================================
 
@@ -261,17 +309,25 @@ def get_seasonal_keywords():
 
 def select_keyword():
     """키워드 선택 우선순위:
-    1. 계절 키워드 + 네이버 트렌드 점수 높은 것
-    2. 계절 키워드 중 미사용 랜덤
-    3. 전체 키워드 중 트렌드 점수 높은 것
-    4. 전체 미사용 키워드 중 랜덤
-    5. 전체 랜덤
+    1. 구글 트렌드 급상승 키워드 (미사용)
+    2. 계절 키워드 + 네이버 트렌드 점수 높은 것
+    3. 계절 키워드 중 미사용 랜덤
+    4. 전체 키워드 중 트렌드 점수 높은 것
+    5. 전체 미사용 키워드 중 랜덤
+    6. 전체 랜덤
     """
 
     recently_used = get_recently_used_keywords(limit=15)
     scores = get_naver_trend_scores()
     seasonal = get_seasonal_keywords()
     seasonal_names = {kw["keyword"] for kw in seasonal}
+
+    # 1. 구글 트렌드 급상승 키워드
+    trend_keywords = get_google_trends_keywords(top_n=5)
+    for kw_text in trend_keywords:
+        if kw_text not in recently_used:
+            print(f"[구글 트렌드 선택] {kw_text}")
+            return {"keyword": kw_text, "category": "트렌드", "seasons": []}
 
     def pick_by_score(candidates):
         """candidates 중 트렌드 점수 높은 미사용 키워드 반환"""

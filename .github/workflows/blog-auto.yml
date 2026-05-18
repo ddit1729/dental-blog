@@ -21,7 +21,7 @@ jobs:
 
       - name: 패키지 설치
         run: |
-          pip install anthropic apscheduler python-dotenv requests gspread google-api-python-client
+          pip install anthropic apscheduler python-dotenv requests gspread google-api-python-client pytrends
 
       - name: 블로그 글 생성
         env:
