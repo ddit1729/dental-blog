@@ -240,16 +240,14 @@ def get_recently_used_keywords(limit=15):
         return set()
 
     files = sorted(
-        [f for f in os.listdir(BLOG_DIR) if f.endswith(".md")],
+        [f for f in os.listdir(BLOG_DIR) if f.endswith(".md") or f.endswith(".txt")],
         reverse=True
     )[:limit]
 
     used = set()
     for filename in files:
-        # 파일명에서 키워드 추출: YYYY-MM-DD-키워드.md → 키워드
-        name = filename[len("YYYY-MM-DD-"):].replace("-", " ").replace(".md", "")
-        # 날짜 부분(11자) 제거
-        name = filename[11:].replace("-", " ").replace(".md", "")
+        # 날짜 부분(11자) 제거, 확장자 제거
+        name = filename[11:].replace("-", " ").replace(".md", "").replace(".txt", "")
         used.add(name)
 
     return used
@@ -340,11 +338,10 @@ def load_recent_post_titles(n=10):
     if not os.path.exists(BLOG_DIR):
         return []
     recent_files = sorted(
-        [f for f in os.listdir(BLOG_DIR) if f.endswith(".md")],
+        [f for f in os.listdir(BLOG_DIR) if f.endswith(".md") or f.endswith(".txt")],
         reverse=True
     )[:n]
-    # 파일명 YYYY-MM-DD-키워드.md → 키워드
-    titles = [f[11:].replace("-", " ").replace(".md", "") for f in recent_files]
+    titles = [f[11:].replace("-", " ").replace(".md", "").replace(".txt", "") for f in recent_files]
     return titles
 
 
