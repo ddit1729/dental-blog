@@ -54,16 +54,25 @@ POSTS_DIR = os.path.join(BASE_DIR, "posts")
 BLOG_DIR = os.path.join(POSTS_DIR, "blog")
 META_DIR = os.path.join(POSTS_DIR, "meta")
 HOOKS_DIR = os.path.join(POSTS_DIR, "hooks")
-_credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-if not _credentials_json:
-    raise EnvironmentError("GOOGLE_CREDENTIALS_JSON 환경변수가 설정되지 않았습니다.")
-try:
-    GOOGLE_CREDENTIALS_INFO = json.loads(_credentials_json)
-except json.JSONDecodeError:
-    # GitHub Secrets에서 private_key의 \n이 실제 줄바꿈으로 변환된 경우 복원
-    _credentials_json = _credentials_json.replace('\n', '\\n').replace('\\\\n', '\\n')
-    GOOGLE_CREDENTIALS_INFO = json.loads(_credentials_json)
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
+
+
+def _load_google_credentials(scopes):
+    """구글 인증 정보 로드. 실패 시 None 반환."""
+    _credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if not _credentials_json:
+        print("[구글 인증] GOOGLE_CREDENTIALS_JSON 환경변수 없음, 구글 연동 건너뜀")
+        return None
+    try:
+        info = json.loads(_credentials_json)
+    except json.JSONDecodeError:
+        _credentials_json = _credentials_json.replace('\n', '\\n').replace('\\\\n', '\\n')
+        try:
+            info = json.loads(_credentials_json)
+        except json.JSONDecodeError as e:
+            print(f"[구글 인증] JSON 파싱 실패: {e}")
+            return None
+    return Credentials.from_service_account_info(info, scopes=scopes)
 
 for d in [BLOG_DIR, META_DIR, HOOKS_DIR]:
     os.makedirs(d, exist_ok=True)
@@ -716,7 +725,9 @@ def create_google_doc(keyword, plain_text):
         "https://www.googleapis.com/auth/documents",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_INFO, scopes=scopes)
+    creds = _load_google_credentials(scopes)
+    if not creds:
+        return ""
 
     docs_service = build("docs", "v1", credentials=creds)
     drive_service = build("drive", "v3", credentials=creds)
@@ -777,7 +788,9 @@ def log_to_sheets(keyword_data, filename, doc_url=""):
 
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(GOOGLE_CREDENTIALS_INFO, scopes=scopes)
+        creds = _load_google_credentials(scopes)
+        if not creds:
+            return
         gc = gspread.authorize(creds)
         sheet = gc.open_by_key(GOOGLE_SHEET_ID).sheet1
 
