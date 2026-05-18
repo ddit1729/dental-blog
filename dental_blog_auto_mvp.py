@@ -240,7 +240,7 @@ def get_recently_used_keywords(limit=15):
         return set()
 
     files = sorted(
-        [f for f in os.listdir(BLOG_DIR) if f.endswith(".txt")],
+        [f for f in os.listdir(BLOG_DIR) if f.endswith(".md")],
         reverse=True
     )[:limit]
 
@@ -340,11 +340,11 @@ def load_recent_post_titles(n=10):
     if not os.path.exists(BLOG_DIR):
         return []
     recent_files = sorted(
-        [f for f in os.listdir(BLOG_DIR) if f.endswith(".txt")],
+        [f for f in os.listdir(BLOG_DIR) if f.endswith(".md")],
         reverse=True
     )[:n]
-    # 파일명 YYYY-MM-DD-키워드.txt → 키워드
-    titles = [f[11:].replace("-", " ").replace(".txt", "") for f in recent_files]
+    # 파일명 YYYY-MM-DD-키워드.md → 키워드
+    titles = [f[11:].replace("-", " ").replace(".md", "") for f in recent_files]
     return titles
 
 
@@ -693,7 +693,7 @@ def save_post(keyword, content):
 
     safe_keyword = keyword.replace(" ", "-")
 
-    filename = f"{date_str}-{safe_keyword}.txt"
+    filename = f"{date_str}-{safe_keyword}.md"
 
     filepath = os.path.join(BLOG_DIR, filename)
     meta_filepath = os.path.join(META_DIR, filename)
@@ -840,7 +840,7 @@ def run_blog_generation():
     final_content = append_images_at_end(filtered_content, keyword_data["keyword"], count=4)
 
     date_str = datetime.now().strftime("%Y-%m-%d")
-    filename = f"{date_str}-{keyword_data['keyword'].replace(' ', '-')}.txt"
+    filename = f"{date_str}-{keyword_data['keyword'].replace(' ', '-')}.md"
 
     save_post(keyword_data["keyword"], final_content)
 
