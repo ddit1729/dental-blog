@@ -236,6 +236,19 @@ def get_naver_trend_scores():
 # 치과 관련 시드 키워드 (구글 트렌드 연관 검색어 탐색용)
 TREND_SEED_KEYWORDS = ["치과", "임플란트", "스케일링", "치아교정", "충치"]
 
+# 치과 관련 키워드 판별 화이트리스트
+DENTAL_FILTER_WORDS = [
+    "치과", "치아", "치료", "임플란트", "스케일링", "충치", "잇몸", "교정",
+    "발치", "신경치료", "미백", "라미네이트", "틀니", "보철", "크라운",
+    "브리지", "사랑니", "치석", "치주", "구강", "칫솔", "치실", "불소",
+    "실란트", "마취", "보험", "치아보험", "턱관절", "이갈이", "구취",
+]
+
+def is_dental_keyword(keyword):
+    """치과 관련 키워드인지 판별"""
+    return any(word in keyword for word in DENTAL_FILTER_WORDS)
+
+
 def get_google_trends_keywords(top_n=5):
     """구글 트렌드에서 치과 관련 급상승 키워드 수집 후 상위 n개 반환"""
 
@@ -252,9 +265,12 @@ def get_google_trends_keywords(top_n=5):
                 rising_df = related.get(seed, {}).get("rising")
 
                 if rising_df is not None and not rising_df.empty:
-                    for _, row in rising_df.head(3).iterrows():
+                    for _, row in rising_df.head(5).iterrows():
                         query = row["query"]
-                        value = row["value"]  # 급상승 수치
+                        value = row["value"]
+                        if not is_dental_keyword(query):
+                            print(f"[구글 트렌드 필터] 제외: {query}")
+                            continue
                         if query not in discovered:
                             discovered[query] = value
                         else:
@@ -266,7 +282,10 @@ def get_google_trends_keywords(top_n=5):
         # 급상승 수치 내림차순 정렬
         sorted_keywords = sorted(discovered.items(), key=lambda x: x[1], reverse=True)
         result = [k for k, _ in sorted_keywords[:top_n]]
-        print(f"[구글 트렌드] 수집된 키워드: {result}")
+        if result:
+            print(f"[구글 트렌드] 치과 관련 키워드: {result}")
+        else:
+            print("[구글 트렌드] 치과 관련 키워드 없음, 기존 DB 사용")
         return result
 
     except ImportError:
