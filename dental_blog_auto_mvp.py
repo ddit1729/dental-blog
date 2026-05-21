@@ -245,7 +245,14 @@ DENTAL_FILTER_WORDS = [
 ]
 
 def is_dental_keyword(keyword):
-    """치과 관련 키워드인지 판별"""
+    """치과 관련 키워드인지 판별 (브랜드명·병원명 제외)"""
+    # 경쟁 브랜드명 또는 특정 병원명이 포함된 키워드 제외
+    BRAND_BLACKLIST = [
+        "닥터후", "닥터 후", "유디치과", "덴티스트", "미플", "디오",
+        "오스템", "덴티움", "메가젠", "네오바이오텍",
+    ]
+    if any(brand in keyword for brand in BRAND_BLACKLIST):
+        return False
     return any(word in keyword for word in DENTAL_FILTER_WORDS)
 
 
