@@ -245,15 +245,35 @@ DENTAL_FILTER_WORDS = [
 ]
 
 def is_dental_keyword(keyword):
-    """치과 관련 키워드인지 판별 (브랜드명·병원명 제외)"""
-    # 경쟁 브랜드명 또는 특정 병원명이 포함된 키워드 제외
+    """치과 관련 키워드인지 판별 (브랜드명·병원명·부정 키워드 제외)"""
+
+    # 1. 부정 키워드: 사건/사고/뉴스성 키워드 제외
+    NEGATIVE_WORDS = [
+        "살인", "사건", "사고", "폭행", "체포", "구속", "판결", "수사",
+        "범죄", "피해", "고소", "고발", "뉴스", "논란", "의혹", "비리",
+        "파산", "폐업", "폐원", "실형", "징역", "벌금",
+    ]
+    if any(word in keyword for word in NEGATIVE_WORDS):
+        return False
+
+    # 2. 특정 병원명·브랜드명 제외 (경쟁사 + 고유명사 병원명)
     BRAND_BLACKLIST = [
         "닥터후", "닥터 후", "유디치과", "덴티스트", "미플", "디오",
         "오스템", "덴티움", "메가젠", "네오바이오텍",
+        "굿모닝", "영호", "서울대", "연세대", "경희대",  # 병원 고유명사
     ]
     if any(brand in keyword for brand in BRAND_BLACKLIST):
         return False
-    return any(word in keyword for word in DENTAL_FILTER_WORDS)
+
+    # 3. 치과 관련 단어 포함 여부 확인
+    if not any(word in keyword for word in DENTAL_FILTER_WORDS):
+        return False
+
+    # 4. 키워드가 너무 길면 제외 (병원명+주소 등 복합어 방지, 15자 초과)
+    if len(keyword.replace(" ", "")) > 15:
+        return False
+
+    return True
 
 
 def get_google_trends_keywords(top_n=5):
